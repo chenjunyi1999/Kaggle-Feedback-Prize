@@ -3,6 +3,7 @@ import os
 # DECLARE HOW MANY GPUS YOU WISH TO USE.
 # KAGGLE ONLY HAS 1, BUT OFFLINE, YOU CAN USE MORE
 from torch.utils.data import DataLoader, Dataset
+from torch import nn
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 0,1,2,3 for four gpu
 
@@ -11,12 +12,12 @@ VER = 1
 
 # IF VARIABLE IS NONE, THEN NOTEBOOK COMPUTES TOKENS
 # OTHERWISE NOTEBOOK LOADS TOKENS FROM PATH
-LOAD_TOKENS_FROM = 'None'
+LOAD_TOKENS_FROM = '../input'
 
 # IF VARIABLE IS NONE, THEN NOTEBOOK TRAINS A NEW MODEL
 # OTHERWISE IT LOADS YOUR PREVIOUSLY TRAINED MODEL
-LOAD_MODEL_FROM = 'None'
-
+LOAD_MODEL_FROM = None
+# LOAD_MODEL_FROM = './'
 # IF FOLLOWING IS NONE, THEN NOTEBOOK
 # USES INTERNET AND DOWNLOADS HUGGINGFACE
 # CONFIG, TOKENIZER, AND MODEL
@@ -24,7 +25,7 @@ DOWNLOADED_MODEL_PATH = '../model/bigbird'
 
 if DOWNLOADED_MODEL_PATH is None:
     DOWNLOADED_MODEL_PATH = 'model'
-MODEL_NAME = 'google/bigbird-roberta-base'
+MODEL_NAME = '../model/bigbird'
 
 #################################################################
 # config
@@ -32,8 +33,8 @@ from torch import cuda
 
 config = {'model_name': MODEL_NAME,
           'max_length': 1024,
-          'train_batch_size': 4,
-          'valid_batch_size': 4,
+          'train_batch_size': 6,
+          'valid_batch_size': 8,
           'epochs': 5,
           'learning_rates': [2.5e-5, 2.5e-5, 2.5e-6, 2.5e-6, 2.5e-7],
           'max_grad_norm': 10,
@@ -50,7 +51,7 @@ import numpy as np, os
 import pandas as pd, gc
 from tqdm import tqdm
 
-from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoConfig
+from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoConfig, AutoModel
 import torch
 from sklearn.metrics import accuracy_score
 
@@ -58,7 +59,7 @@ from sklearn.metrics import accuracy_score
 train_df = pd.read_csv('../input/feedback-prize-2021/train.csv')
 print(train_df.shape)
 # 输出前5条数据
-train_df.head()
+print(train_df.head())
 
 # 读取测试集文本
 test_names, test_texts = [], []
@@ -66,7 +67,7 @@ for f in list(os.listdir('../input/feedback-prize-2021/test')):
     test_names.append(f.replace('.txt', ''))
     test_texts.append(open('../input/feedback-prize-2021/test/' + f, 'r').read())
 test_texts = pd.DataFrame({'id': test_names, 'text': test_texts})
-test_texts.head()
+print(test_texts.head())
 
 # 读取训练集文本
 train_names, train_texts = [], []
@@ -74,7 +75,7 @@ for f in tqdm(list(os.listdir('../input/feedback-prize-2021/train'))):
     train_names.append(f.replace('.txt', ''))
     train_texts.append(open('../input/feedback-prize-2021/train/' + f, 'r').read())
 train_text_df = pd.DataFrame({'id': train_names, 'text': train_texts})
-train_text_df.head()
+print(train_text_df.head())
 
 ###############################################################
 # 转化为ner标签
@@ -85,9 +86,9 @@ if not LOAD_TOKENS_FROM:
     for ii, i in enumerate(train_text_df.iterrows()):
         if ii % 100 == 0:
             print(ii, ', ', end='')
+        # i[0]为序号，真正的字典存储在i[1]
         total = i[1]['text'].split().__len__()
         entities = ["O"] * total
-        print(i[1]['text'])
         for j in train_df[train_df['id'] == i[1]['id']].iterrows():
             discourse = j[1]['discourse_type']
             list_ix = [int(x) for x in j[1]['predictionstring'].split(' ')]
@@ -95,7 +96,7 @@ if not LOAD_TOKENS_FROM:
             for k in list_ix[1:]: entities[k] = f"I-{discourse}"
         all_entities.append(entities)
     train_text_df['entities'] = all_entities
-    train_text_df.to_csv('train_NER.csv', index=False)
+    train_text_df.to_csv('../input/train_NER.csv', index=False)
 
 else:
     from ast import literal_eval
@@ -149,14 +150,13 @@ class dataset(Dataset):
                                   truncation=True,
                                   max_length=self.max_len)
         word_ids = encoding.word_ids()
-
         # CREATE TARGETS
         if not self.get_wids:
             previous_word_idx = None
             label_ids = []
             for word_idx in word_ids:
                 if word_idx is None:
-                    label_ids.append(-100)
+                    label_ids.append(labels_to_ids['O'])
                 elif word_idx != previous_word_idx:
                     label_ids.append(labels_to_ids[word_labels[word_idx]])
                 else:
@@ -224,17 +224,39 @@ testing_loader = DataLoader(testing_set, **test_params)
 test_texts_set = dataset(test_texts, tokenizer, config['max_length'], True)
 test_texts_loader = DataLoader(test_texts_set, **test_params)
 
+
 ######################################################################
 # 模型训练
 # 训练五个epoch，每个epoch的学习率都一次下降
 
 # CREATE MODEL
-config_model = AutoConfig.from_pretrained(DOWNLOADED_MODEL_PATH + '/config.json')
-model = AutoModelForTokenClassification.from_pretrained(
-    DOWNLOADED_MODEL_PATH + '/pytorch_model.bin', config=config_model)
-model.to(config['device'])
-optimizer = torch.optim.Adam(params=model.parameters(), lr=config['learning_rates'][0])
+class MyModel(nn.Module):
+    def __init__(self, freeze_bert=False, model_name='bert-base-chinese', hidden_size=768, num_classes=2):
+        super(MyModel, self).__init__()
+        # output_hidden_states=True输出每一层transformer的输出，但是只有最后一层为常用word embedding
+        self.automodel = AutoModel.from_pretrained(model_name, output_hidden_states=True, return_dict=True)
 
+        if freeze_bert:
+            for p in self.automodel.parameters():
+                p.requires_grad = False
+
+        self.fc = nn.Sequential(
+            nn.Dropout(p=0.5),
+            nn.Linear(hidden_size * 4, num_classes, bias=False),
+        )
+
+    def forward(self, input_ids, attn_masks):
+        outputs = self.automodel(input_ids, attention_mask=attn_masks)
+        hidden_states = torch.cat(tuple([outputs.hidden_states[i] for i in [-1, -2, -3, -4]]),
+                                  dim=-1)  # [bs, seq_len, hidden_dim*4]
+        first_hidden_states = hidden_states[:, :, :]  # [bs, hidden_dim*4]
+        logits = self.fc(first_hidden_states)
+        return logits
+
+
+model = MyModel(model_name=DOWNLOADED_MODEL_PATH, num_classes=15)
+optimizer = torch.optim.Adam(params=model.parameters(), lr=config['learning_rates'][0])
+model.to(config['device'])
 
 def train(epoch):
     tr_loss, tr_accuracy = 0, 0
@@ -243,15 +265,15 @@ def train(epoch):
 
     # put model in training mode
     model.train()
-
+    lossn = nn.CrossEntropyLoss()
     for idx, batch in enumerate(training_loader):
-
         ids = batch['input_ids'].to(config['device'], dtype=torch.long)
         mask = batch['attention_mask'].to(config['device'], dtype=torch.long)
         labels = batch['labels'].to(config['device'], dtype=torch.long)
-
-        loss, tr_logits = model(input_ids=ids, attention_mask=mask, labels=labels,
-                                return_dict=False)
+        tr_logits = model(input_ids=ids, attn_masks=mask)
+        loss = 0
+        for i in range(len(tr_logits)):
+            loss += lossn(tr_logits[i], labels[i])
         tr_loss += loss.item()
 
         nb_tr_steps += 1
@@ -263,7 +285,7 @@ def train(epoch):
 
         # compute training accuracy
         flattened_targets = labels.view(-1)  # shape (batch_size * seq_len,)
-        active_logits = tr_logits.view(-1, model.num_labels)  # shape (batch_size * seq_len, num_labels)
+        active_logits = tr_logits.view(-1, 15)  # shape (batch_size * seq_len, num_labels)
         flattened_predictions = torch.argmax(active_logits, axis=1)  # shape (batch_size * seq_len,)
 
         # only compute accuracy at active labels
@@ -315,14 +337,16 @@ else:
     model.load_state_dict(torch.load(f'{LOAD_MODEL_FROM}/bigbird_v{VER}.pt'))
     print('Model loaded.')
 
+
 #################################################################################
 # 推理及验证数据
 def inference(batch):
     # MOVE BATCH TO GPU AND INFER
     ids = batch["input_ids"].to(config['device'])
     mask = batch["attention_mask"].to(config['device'])
-    outputs = model(ids, attention_mask=mask, return_dict=False)
-    all_preds = torch.argmax(outputs[0], axis=-1).cpu().numpy()
+    outputs = model(ids, attn_masks=mask)
+
+    all_preds = torch.argmax(outputs, axis=-1).cpu().numpy()
 
     # INTERATE THROUGH EACH TEXT AND GET PRED
     predictions = []
@@ -342,8 +366,9 @@ def inference(batch):
 
     return predictions
 
+
 # 在推理阶段，对每个字词都进行预测。所以在最后得到输出标签时，要将这些自词合并
-#TODO 尝试不同的子词标签合并方法
+# TODO 尝试不同的子词标签合并方法
 
 def get_predictions(df=test_dataset, loader=testing_loader):
     # put model in training mode
@@ -455,6 +480,29 @@ def score_feedback_comp(pred_df, gt_df):
     # calc microf1
     my_f1_score = TP / (TP + 0.5 * (FP + FN))
     return my_f1_score
+
+
+if COMPUTE_VAL_SCORE:
+    # note this doesn't run during submit
+    # VALID TARGETS
+    valid = train_df.loc[train_df['id'].isin(IDS[valid_idx])]
+
+    # OOF PREDICTIONS
+    oof = get_predictions(test_dataset, testing_loader)
+
+    # COMPUTE F1 SCORE
+    f1s = []
+    CLASSES = oof['class'].unique()
+    print()
+    for c in CLASSES:
+        pred_df = oof.loc[oof['class'] == c].copy()
+        gt_df = valid.loc[valid['discourse_type'] == c].copy()
+        f1 = score_feedback_comp(pred_df, gt_df)
+        print(c, f1)
+        f1s.append(f1)
+    print()
+    print('Overall', np.mean(f1s))
+    print()
 
 # 生成测试结果
 sub = get_predictions(test_texts, test_texts_loader)
