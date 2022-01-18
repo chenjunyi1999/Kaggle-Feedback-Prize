@@ -3,6 +3,7 @@
 commas = ['.', ',', '!', '...', '......', '?', '"', '\'']
 
 
+
 def correct(words, type=0):
     from spellchecker import SpellChecker
     spell = SpellChecker()
@@ -13,7 +14,10 @@ def correct(words, type=0):
             cur_word = spell.correction(words[i])
             if words[i] != cur_word:
                 if words[i][-1] in commas:
-                    continue
+                    if words[i][:-1] != spell.correction(words[i][:-1]):
+                        words[i] = spell.correction(words[i][:-1]) + words[i][-1]
+                    else:
+                        continue
                 else:
                     words[i] = cur_word
         return ' '.join(words)
@@ -23,8 +27,17 @@ def correct(words, type=0):
         for i in range(len(words)):
             cur_word = spell.correction(words[i])
             if words[i] != cur_word:
-                words[i] = cur_word
+                if words[i][-1] in commas:
+                    if words[i][:-1] != spell.correction(words[i][:-1]):
+                        words[i] = spell.correction(words[i][:-1]) + words[i][-1]
+                        print("===", words[i])
+                    else:
+                        continue
+                else:
+                    words[i] = cur_word
         return words
+
+    # 类型错误
     else:
         print("type error")
         return
