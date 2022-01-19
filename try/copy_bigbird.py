@@ -175,39 +175,42 @@ def word_level_aug(text, ratio=0.15):
         text[idx] = random.sample(idx_synonyms, 1)[0]
     return ' '.join([i for i in text])
 
-def ri_rs_rd(text, label, ratio=0.15):
+def ri_rs_rd(text, label, ratio):
     text = text.split()
     length = len(text)
-    num_changes = [int(length * rat) for rat in ratio]
-    # 随机插入
-    for i in range(num_changes[0]):
-        idx = random.randint(0, len(text) - 1)
-        k = label[idx]
-        if text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
-            continue
-        idx_synonyms = []
-        for syn in wordnet.synsets(text[idx]):
-            for lm in syn.lemmas():
-                idx_synonyms.append(lm.name())
-        if len(idx_synonyms)<1:
-            continue
-        index = random.randint(0, len(text))
-        text.insert(index, random.sample(idx_synonyms, 1)[0])
-        label.insert(index, label[idx])
+    num_changes = int(length * ratio)
+    k = random.randint(0, 2)
+    if k == 0:
+        # 随机插入
+        for i in range(num_changes):
+            idx = random.randint(0, len(text) - 1)
+            k = label[idx]
+            if text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
+                continue
+            idx_synonyms = []
+            for syn in wordnet.synsets(text[idx]):
+                for lm in syn.lemmas():
+                    idx_synonyms.append(lm.name())
+            if len(idx_synonyms)<1:
+                continue
+            index = random.randint(0, len(text))
+            text.insert(index, random.sample(idx_synonyms, 1)[0])
+            label.insert(index, label[idx])
 
+    if k == 1:
+        # 随机交换
+        for i in range(num_changes[1]):
+            idx1 = random.randint(0, len(text) - 1)
+            idx2 = random.randint(0, len(text) - 1)
+            text[idx1], text[idx2] = text[idx2], text[idx1]
+            label[idx1], label[idx2] = label[idx2], label[idx1]
 
-    # 随机交换
-    for i in range(num_changes[1]):
-        idx1 = random.randint(0, len(text) - 1)
-        idx2 = random.randint(0, len(text) - 1)
-        text[idx1], text[idx2] = text[idx2], text[idx1]
-        label[idx1], label[idx2] = label[idx2], label[idx1]
-
-    #随机删除
-    for i in range(num_changes[2]):
-        idx = random.randint(0, len(text) - 1)
-        text.pop(idx)
-        label.pop(idx)
+    if k == 2:
+        #随机删除
+        for i in range(num_changes[2]):
+            idx = random.randint(0, len(text) - 1)
+            text.pop(idx)
+            label.pop(idx)
 
     return ' '.join([i for i in text]), label
 
@@ -228,8 +231,11 @@ class dataset(Dataset):
             random.seed(42)
             randint = random.randrange(0,2)
             if randint == 1:
-                text = word_level_aug(text, 0.5)
-                text, word_labels = ri_rs_rd(text, word_labels, [0.3, 0.3, 0.3])
+                radint = random.randrange(0, 100)
+                if radint < 40:
+                    text = word_level_aug(text, 0.5)
+                else:
+                    text, word_labels = ri_rs_rd(text, word_labels, 0.2)
 
 
         # TOKENIZE TEXT
