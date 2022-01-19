@@ -125,95 +125,8 @@ ids_to_labels = {k: v for k, v in enumerate(output_labels)}
 
 #########################################################################
 # 定义dataset
-import nltk
-from nltk.corpus import wordnet
-import random
 
 LABEL_ALL_SUBTOKENS = True
-
-def correct(words, type=0):
-    from spellchecker import SpellChecker
-    spell = SpellChecker()
-    # 是字符，也返回字符
-    if type == 0:
-        words = words.split(' ')
-        for i in range(len(words)):
-            cur_word = spell.correction(words[i])
-            if words[i] != cur_word:
-                if words[i][-1] in commas:
-                    continue
-                else:
-                    words[i] = cur_word
-        return ' '.join(words)
-
-    # 是列表，也返回列表
-    elif type == 1:
-        for i in range(len(words)):
-            cur_word = spell.correction(words[i])
-            if words[i] != cur_word:
-                words[i] = cur_word
-        return words
-    else:
-        print("type error")
-        return
-
-def word_level_aug(text, ratio=0.15):
-    text = text.split()
-    length = len(text)
-    num_changes = int(length*ratio)
-    # 生成肯定不相同的
-    idxs = random.sample(range(0, length-1), num_changes)
-    for idx in idxs:
-        if text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
-            continue
-        idx_synonyms = []
-        for syn in wordnet.synsets(text[idx]):
-            for lm in syn.lemmas():
-                idx_synonyms.append(lm.name())
-        if len(idx_synonyms)<1:
-            continue
-        text[idx] = random.sample(idx_synonyms, 1)[0]
-    return ' '.join([i for i in text])
-
-def ri_rs_rd(text, label, ratio):
-    text = text.split()
-    length = len(text)
-    num_changes = int(length * ratio)
-    k = random.randint(0, 2)
-    if k == 0:
-        # 随机插入
-        for i in range(num_changes):
-            idx = random.randint(0, len(text) - 1)
-            k = label[idx]
-            if text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
-                continue
-            idx_synonyms = []
-            for syn in wordnet.synsets(text[idx]):
-                for lm in syn.lemmas():
-                    idx_synonyms.append(lm.name())
-            if len(idx_synonyms)<1:
-                continue
-            index = random.randint(0, len(text))
-            text.insert(index, random.sample(idx_synonyms, 1)[0])
-            label.insert(index, label[idx])
-
-    if k == 1:
-        # 随机交换
-        for i in range(num_changes[1]):
-            idx1 = random.randint(0, len(text) - 1)
-            idx2 = random.randint(0, len(text) - 1)
-            text[idx1], text[idx2] = text[idx2], text[idx1]
-            label[idx1], label[idx2] = label[idx2], label[idx1]
-
-    if k == 2:
-        #随机删除
-        for i in range(num_changes[2]):
-            idx = random.randint(0, len(text) - 1)
-            text.pop(idx)
-            label.pop(idx)
-
-    return ' '.join([i for i in text]), label
-
 
 class dataset(Dataset):
     def __init__(self, dataframe, tokenizer, max_len, get_wids):
@@ -227,16 +140,6 @@ class dataset(Dataset):
         # GET TEXT AND WORD LABELS
         text = self.data.text[index]
         word_labels = self.data.entities[index] if not self.get_wids else None
-        if not self.get_wids:
-            random.seed(42)
-            randint = random.randrange(0,2)
-            if randint == 1:
-                radint = random.randrange(0, 100)
-                if radint < 40:
-                    text = word_level_aug(text, 0.5)
-                else:
-                    text, word_labels = ri_rs_rd(text, word_labels, 0.2)
-
 
         # TOKENIZE TEXT
         # is_split_into_words:假设输入已经按字切分，直接进行tokenize，适用于ner
