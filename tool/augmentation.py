@@ -22,7 +22,7 @@ def word_level_aug(text, ratio=0.15):
                 idx_synonyms.append(lm.name())
         if len(idx_synonyms)<1:
             continue
-        text[idx] = random.sample(idx_synonyms, 1)
+        text[idx] = random.sample(idx_synonyms, 1)[0]
     return ''.join(text)
 
 # todo 句子级别同义、增删、翻转
