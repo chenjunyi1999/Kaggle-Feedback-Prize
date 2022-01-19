@@ -8,8 +8,7 @@ from torch import nn
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 0,1,2,3 for four gpu
 
 # VERSION FOR SAVING MODEL WEIGHTS
-VER = 1
-
+VER = 3
 # IF VARIABLE IS NONE, THEN NOTEBOOK COMPUTES TOKENS
 # OTHERWISE NOTEBOOK LOADS TOKENS FROM PATH
 LOAD_TOKENS_FROM = '../input'
@@ -18,6 +17,7 @@ LOAD_TOKENS_FROM = '../input'
 # OTHERWISE IT LOADS YOUR PREVIOUSLY TRAINED MODEL
 LOAD_MODEL_FROM = None
 # LOAD_MODEL_FROM = './'
+
 # IF FOLLOWING IS NONE, THEN NOTEBOOK
 # USES INTERNET AND DOWNLOADS HUGGINGFACE
 # CONFIG, TOKENIZER, AND MODEL
@@ -125,7 +125,91 @@ ids_to_labels = {k: v for k, v in enumerate(output_labels)}
 
 #########################################################################
 # 定义dataset
+import nltk
+from nltk.corpus import wordnet
+import random
+
 LABEL_ALL_SUBTOKENS = True
+
+def correct(words, type=0):
+    from spellchecker import SpellChecker
+    spell = SpellChecker()
+    # 是字符，也返回字符
+    if type == 0:
+        words = words.split(' ')
+        for i in range(len(words)):
+            cur_word = spell.correction(words[i])
+            if words[i] != cur_word:
+                if words[i][-1] in commas:
+                    continue
+                else:
+                    words[i] = cur_word
+        return ' '.join(words)
+
+    # 是列表，也返回列表
+    elif type == 1:
+        for i in range(len(words)):
+            cur_word = spell.correction(words[i])
+            if words[i] != cur_word:
+                words[i] = cur_word
+        return words
+    else:
+        print("type error")
+        return
+
+def word_level_aug(text, ratio=0.15):
+    text = text.split()
+    length = len(text)
+    num_changes = int(length*ratio)
+    # 生成肯定不相同的
+    idxs = random.sample(range(0, length-1), num_changes)
+    for idx in idxs:
+        if text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
+            continue
+        idx_synonyms = []
+        for syn in wordnet.synsets(text[idx]):
+            for lm in syn.lemmas():
+                idx_synonyms.append(lm.name())
+        if len(idx_synonyms)<1:
+            continue
+        text[idx] = random.sample(idx_synonyms, 1)[0]
+    return ' '.join([i for i in text])
+
+def ri_rs_rd(text, label, ratio=0.15):
+    text = text.split()
+    length = len(text)
+    num_changes = [int(length * rat) for rat in ratio]
+    # 随机插入
+    for i in range(num_changes[0]):
+        idx = random.randint(0, len(text) - 1)
+        k = label[idx]
+        if text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
+            continue
+        idx_synonyms = []
+        for syn in wordnet.synsets(text[idx]):
+            for lm in syn.lemmas():
+                idx_synonyms.append(lm.name())
+        if len(idx_synonyms)<1:
+            continue
+        index = random.randint(0, len(text))
+        text.insert(index, random.sample(idx_synonyms, 1)[0])
+        label.insert(index, label[idx])
+
+
+    # 随机交换
+    for i in range(num_changes[1]):
+        idx1 = random.randint(0, len(text) - 1)
+        idx2 = random.randint(0, len(text) - 1)
+        text[idx1], text[idx2] = text[idx2], text[idx1]
+        label[idx1], label[idx2] = label[idx2], label[idx1]
+
+    #随机删除
+    for i in range(num_changes[2]):
+        idx = random.randint(0, len(text) - 1)
+        text.pop(idx)
+        label.pop(idx)
+
+    return ' '.join([i for i in text]), label
 
 
 class dataset(Dataset):
@@ -140,6 +224,13 @@ class dataset(Dataset):
         # GET TEXT AND WORD LABELS
         text = self.data.text[index]
         word_labels = self.data.entities[index] if not self.get_wids else None
+        if not self.get_wids:
+            random.seed(42)
+            randint = random.randrange(0,2)
+            if randint == 1:
+                text = word_level_aug(text, 0.5)
+                text, word_labels = ri_rs_rd(text, word_labels, [0.3, 0.3, 0.3])
+
 
         # TOKENIZE TEXT
         # is_split_into_words:假设输入已经按字切分，直接进行tokenize，适用于ner
@@ -156,7 +247,7 @@ class dataset(Dataset):
             label_ids = []
             for word_idx in word_ids:
                 if word_idx is None:
-                    label_ids.append(labels_to_ids['O'])
+                    label_ids.append(-100)
                 elif word_idx != previous_word_idx:
                     label_ids.append(labels_to_ids[word_labels[word_idx]])
                 else:
@@ -236,25 +327,36 @@ class MyModel(nn.Module):
         # output_hidden_states=True输出每一层transformer的输出，但是只有最后一层为常用word embedding
         self.automodel = AutoModel.from_pretrained(model_name, output_hidden_states=True, return_dict=True)
 
-        if freeze_bert:
-            for p in self.automodel.parameters():
-                p.requires_grad = False
-
         self.fc = nn.Sequential(
             nn.Dropout(p=0.5),
             nn.Linear(hidden_size * 4, num_classes, bias=False),
         )
 
+        if freeze_bert:
+            for p in self.automodel.parameters():
+                p.requires_grad = False
+            for p in self.fc.parameters():
+                p.requires_grad = False
+        '''
+        self.is_con_re = nn.Sequential(
+            nn.Dropout(p=0.5),
+            nn.Linear(hidden_size * 4, 3, bias=False),
+        ) # 1是'Counterclaim', 2是'Rebuttal'
+        '''
+
     def forward(self, input_ids, attn_masks):
         outputs = self.automodel(input_ids, attention_mask=attn_masks)
         hidden_states = torch.cat(tuple([outputs.hidden_states[i] for i in [-1, -2, -3, -4]]),
                                   dim=-1)  # [bs, seq_len, hidden_dim*4]
-        first_hidden_states = hidden_states[:, :, :]  # [bs, hidden_dim*4]
-        logits = self.fc(first_hidden_states)
-        return logits
+        #first_hidden_states = hidden_states[:, :, :]  # [bs, hidden_dim*4]
+        logits = self.fc(hidden_states)
+        logits = torch.softmax(logits, dim=-1)
+        #log = self.is_con_re(hidden_states)
+        #log = torch.softmax(log, dim=-1)
+        return logits # , log
 
 
-model = MyModel(model_name=DOWNLOADED_MODEL_PATH, num_classes=15)
+model = MyModel(model_name=DOWNLOADED_MODEL_PATH, num_classes=15, freeze_bert=False)
 optimizer = torch.optim.Adam(params=model.parameters(), lr=config['learning_rates'][0])
 model.to(config['device'])
 
@@ -270,10 +372,30 @@ def train(epoch):
         ids = batch['input_ids'].to(config['device'], dtype=torch.long)
         mask = batch['attention_mask'].to(config['device'], dtype=torch.long)
         labels = batch['labels'].to(config['device'], dtype=torch.long)
+
         tr_logits = model(input_ids=ids, attn_masks=mask)
+        #tr_logits, is_two = model(input_ids=ids, attn_masks=mask)
         loss = 0
+        labels2 = []
+        '''
+        for i1 in range(len(labels)):
+            label = []
+            for i2 in range(len(labels[i1])):
+                if labels[i1][i2] == -100:
+                    label.append(-100)
+                    continue
+                if 'Counterclaim' in ids_to_labels[int(labels[i1][i2])]:
+                    label.append(1)
+                elif 'Rebuttal' in ids_to_labels[int(labels[i1][i2])]:
+                    label.append(2)
+                else:
+                    label.append(0)
+            labels2.append(label)
+        '''
         for i in range(len(tr_logits)):
             loss += lossn(tr_logits[i], labels[i])
+            #loss += lossn(is_two[i], torch.tensor(labels2[i]).to(config['device']))
+
         tr_loss += loss.item()
 
         nb_tr_steps += 1
@@ -319,6 +441,16 @@ def train(epoch):
 
 # 加载\训练模型
 if not LOAD_MODEL_FROM:
+    # 加载模型部分参数
+    '''
+    path = './bigbird_v1.pt'
+    save_model = torch.load(path)
+    model_dict = model.state_dict()
+    state_dict = {k: v for k, v in save_model.items() if k in model_dict.keys()}
+    print(state_dict.keys())
+    model_dict.update(state_dict)
+    model.load_state_dict(model_dict)
+    '''
     for epoch in range(config['epochs']):
 
         print(f"### Training epoch: {epoch + 1}")
@@ -340,20 +472,44 @@ else:
 
 #################################################################################
 # 推理及验证数据
+proba_thresh = {
+    "Lead": 0.7,
+    "Position": 0.55,
+    "Evidence": 0.65,
+    "Claim": 0.55,
+    "Concluding Statement": 0.7,
+    "Counterclaim": 0.5,
+    "Rebuttal": 0.55,
+}
+
+min_thresh = {
+    "Lead": 9,
+    "Position": 5,
+    "Evidence": 14,
+    "Claim": 3,
+    "Concluding Statement": 11,
+    "Counterclaim": 6,
+    "Rebuttal": 4,
+}
+
 def inference(batch):
     # MOVE BATCH TO GPU AND INFER
     ids = batch["input_ids"].to(config['device'])
     mask = batch["attention_mask"].to(config['device'])
+    #outputs, is_two = model(ids, attn_masks=mask)
     outputs = model(ids, attn_masks=mask)
 
     all_preds = torch.argmax(outputs, axis=-1).cpu().numpy()
-
+    #twos = torch.argmax(is_two, axis=-1).cpu().numpy()
+    outputs = outputs.detach().cpu().numpy()
     # INTERATE THROUGH EACH TEXT AND GET PRED
     predictions = []
+    sorces = []
     for k, text_preds in enumerate(all_preds):
         token_preds = [ids_to_labels[i] for i in text_preds]
 
         prediction = []
+        sorce = []
         word_ids = batch['wids'][k].numpy()
         previous_word_idx = -1
         for idx, word_idx in enumerate(word_ids):
@@ -361,10 +517,13 @@ def inference(batch):
                 pass
             elif word_idx != previous_word_idx:
                 prediction.append(token_preds[idx])
+                sorce.append(outputs[k][idx][text_preds[idx]])
                 previous_word_idx = word_idx
         predictions.append(prediction)
+        sorces.append(sorce)
 
-    return predictions
+    return predictions, sorces
+    #return predictions, sorces, twos
 
 
 # 在推理阶段，对每个字词都进行预测。所以在最后得到输出标签时，要将这些自词合并
@@ -376,9 +535,13 @@ def get_predictions(df=test_dataset, loader=testing_loader):
 
     # GET WORD LABEL PREDICTIONS
     y_pred2 = []
+    y_log = []
+    # y_two = []
     for batch in loader:
-        labels = inference(batch)
+        labels, logs, twos = inference(batch)
         y_pred2.extend(labels)
+        y_log.extend(logs)
+        # y_two.extend(twos)
 
     final_preds2 = []
     for i in range(len(df)):
@@ -386,19 +549,48 @@ def get_predictions(df=test_dataset, loader=testing_loader):
         idx = df.id.values[i]
         # pred = [x.replace('B-','').replace('I-','') for x in y_pred2[i]]
         pred = y_pred2[i]  # Leave "B" and "I"
+        grade = y_log[i]
+        # twoes = y_two[i]
         preds = []
         j = 0
+        torch.set_printoptions(threshold=np.inf)
+        '''
+        print([twoes[i] for i in range(len(twoes)) if twoes[i]!=0])
+        '''
         while j < len(pred):
             cls = pred[j]
+            # is_x = twoes[j]
+            sum_prd = 0
+
+            '''
+            if is_x == 0:
+                pass
+            else:
+                start = j
+                stop = j + 1
+                while stop < len(twoes) and twoes[stop] == is_x:
+                    stop += 1
+                if stop - start >= 10:
+                    if is_x == 2:
+                        final_preds2.append((idx, 'Rebuttal',
+                                         ' '.join(map(str, list(range(start, stop))))))
+                    else:
+                        final_preds2.append((idx, 'Counterclaim',
+                                             ' '.join(map(str, list(range(start, stop))))))
+                    j = stop
+                    continue
+            '''
             if cls == 'O':
                 j += 1
             else:
                 cls = cls.replace('B', 'I')  # spans start with B
+                sum_prd += grade[j]
             end = j + 1
             while end < len(pred) and pred[end] == cls:
+                sum_prd += grade[end]
                 end += 1
 
-            if cls != 'O' and cls != '' and end - j > 7:
+            if cls != 'O' and cls != '' and sum_prd/(end - j) >= proba_thresh[cls.replace('I-', '')] and end - j >= min_thresh[cls.replace('I-', '')]:
                 final_preds2.append((idx, cls.replace('I-', ''),
                                      ' '.join(map(str, list(range(j, end))))))
 
@@ -479,7 +671,7 @@ def score_feedback_comp(pred_df, gt_df):
     FN = len(unmatched_gt_ids)
     # calc microf1
     my_f1_score = TP / (TP + 0.5 * (FP + FN))
-    return my_f1_score
+    return my_f1_score, TP, FP, FN
 
 
 if COMPUTE_VAL_SCORE:
@@ -497,8 +689,8 @@ if COMPUTE_VAL_SCORE:
     for c in CLASSES:
         pred_df = oof.loc[oof['class'] == c].copy()
         gt_df = valid.loc[valid['discourse_type'] == c].copy()
-        f1 = score_feedback_comp(pred_df, gt_df)
-        print(c, f1)
+        f1, TP, FP, FN = score_feedback_comp(pred_df, gt_df)
+        print(c, f1, "TP: ", TP, ", FP: ", FP, ' FN: ', FN)
         f1s.append(f1)
     print()
     print('Overall', np.mean(f1s))
