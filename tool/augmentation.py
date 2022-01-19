@@ -1,5 +1,5 @@
 import nltk
-from nltk import wordnet
+from nltk.corpus import wordnet
 import random
 import numpy as np
 nltk.download('wordnet')
