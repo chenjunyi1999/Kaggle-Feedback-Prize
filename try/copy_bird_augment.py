@@ -140,7 +140,7 @@ def correct(words, type=0):
         for i in range(len(words)):
             cur_word = spell.correction(words[i])
             if words[i] != cur_word:
-                if words[i][-1] in commas:
+                if words[i][-1] in  ['\'','"','.',',','?','!','......','...']:
                     continue
                 else:
                     words[i] = cur_word
