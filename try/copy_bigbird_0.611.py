@@ -447,7 +447,8 @@ def get_predictions(df=test_dataset, loader=testing_loader):
     y_log = []
     # y_two = []
     for batch in loader:
-        labels, logs, twos = inference(batch)
+        #labels, logs, twos = inference(batch)
+        labels, logs = inference(batch)
         y_pred2.extend(labels)
         y_log.extend(logs)
         # y_two.extend(twos)
