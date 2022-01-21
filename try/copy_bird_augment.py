@@ -16,7 +16,7 @@ LOAD_TOKENS_FROM = '../input'
 # IF VARIABLE IS NONE, THEN NOTEBOOK TRAINS A NEW MODEL
 # OTHERWISE IT LOADS YOUR PREVIOUSLY TRAINED MODEL
 LOAD_MODEL_FROM = None
-# LOAD_MODEL_FROM = './'
+#LOAD_MODEL_FROM = './'
 
 # IF FOLLOWING IS NONE, THEN NOTEBOOK
 # USES INTERNET AND DOWNLOADS HUGGINGFACE
@@ -36,7 +36,7 @@ config = {'model_name': MODEL_NAME,
           'train_batch_size': 6,
           'valid_batch_size': 6,
           'epochs': 5,
-          'learning_rates': [2.5e-5, 2.5e-5, 2.5e-6, 2.5e-6, 2.5e-7],
+          'learning_rates': [2.5e-5, 2.5e-5, 2.5e-6, 2.5e-6, 2.5e-6, 2.5e-6, 2.5e-7, 2.5e-7, 2.5e-7, 2.5e-7],
           'max_grad_norm': 10,
           'device': 'cuda' if cuda.is_available() else 'cpu'}
 
@@ -101,7 +101,8 @@ if not LOAD_TOKENS_FROM:
 else:
     from ast import literal_eval
 
-    train_text_df = pd.read_csv(f'{LOAD_TOKENS_FROM}/train_NER.csv')
+    #train_text_df = pd.read_csv(f'{LOAD_TOKENS_FROM}/train_NER.csv')
+    train_text_df = pd.read_csv(f'{LOAD_TOKENS_FROM}/train_NER_augment_counter_and_rebuttal.csv')
     # pandas saves lists as string, we must convert back
     # 将字符串形的list转化会list
     train_text_df.entities = train_text_df.entities.apply(lambda x: literal_eval(x))
@@ -204,10 +205,10 @@ def ri_rs_rd(text, label, ratio):
                     idx_synonyms.append(lm.name())
             if len(idx_synonyms)<1:
                 continue
-            index = random.randint(0, len(text))
+            index = random.randint(0, len(text) - 1)
             n = 0
             while k != label[index]:
-                index = random.randint(0, len(text))
+                index = random.randint(0, len(text) - 1)
                 if n > 10:
                     break
             text.insert(index, random.sample(idx_synonyms, 1)[0])
@@ -253,16 +254,17 @@ class dataset(Dataset):
         # GET TEXT AND WORD LABELS
         text = self.data.text[index]
         word_labels = self.data.entities[index] if not self.get_wids else None
+        '''
         if not self.get_wids:
-            random.seed(42)
+
             randint = random.randrange(0,2)
             if randint == 1:
                 radint = random.randrange(0, 10)
                 if radint < 4:
                     text = word_level_aug(text, 0.5)
-                else:
-                    text, word_labels = ri_rs_rd(text, word_labels, 0.15)
-
+                #else:
+                    #text, word_labels = ri_rs_rd(text, word_labels, 0.15)
+        '''
 
         # TOKENIZE TEXT
         # is_split_into_words:假设输入已经按字切分，直接进行tokenize，适用于ner
@@ -279,7 +281,7 @@ class dataset(Dataset):
             label_ids = []
             for word_idx in word_ids:
                 if word_idx is None:
-                    label_ids.append(-100)
+                    label_ids.append(labels_to_ids['O'])
                 elif word_idx != previous_word_idx:
                     label_ids.append(labels_to_ids[word_labels[word_idx]])
                 else:
@@ -305,7 +307,7 @@ class dataset(Dataset):
 #################################################################
 # 创建训练集和验证集：9：1
 # CHOOSE VALIDATION INDEXES (that match my TF notebook)
-IDS = train_df.id.unique()
+IDS = train_text_df['id'].unique()
 print('There are', len(IDS), 'train texts. We will split 90% 10% for validation.')
 
 # TRAIN VALID SPLIT 90% 10%
@@ -369,23 +371,14 @@ class MyModel(nn.Module):
                 p.requires_grad = False
             for p in self.fc.parameters():
                 p.requires_grad = False
-        '''
-        self.is_con_re = nn.Sequential(
-            nn.Dropout(p=0.5),
-            nn.Linear(hidden_size * 4, 3, bias=False),
-        ) # 1是'Counterclaim', 2是'Rebuttal'
-        '''
 
     def forward(self, input_ids, attn_masks):
         outputs = self.automodel(input_ids, attention_mask=attn_masks)
         hidden_states = torch.cat(tuple([outputs.hidden_states[i] for i in [-1, -2, -3, -4]]),
                                   dim=-1)  # [bs, seq_len, hidden_dim*4]
-        #first_hidden_states = hidden_states[:, :, :]  # [bs, hidden_dim*4]
-        logits = self.fc(hidden_states)
-        logits = torch.softmax(logits, dim=-1)
-        #log = self.is_con_re(hidden_states)
-        #log = torch.softmax(log, dim=-1)
-        return logits # , log
+        first_hidden_states = hidden_states[:, :, :]  # [bs, hidden_dim*4]
+        logits = self.fc(first_hidden_states)
+        return logits
 
 
 model = MyModel(model_name=DOWNLOADED_MODEL_PATH, num_classes=15, freeze_bert=False)
@@ -406,27 +399,10 @@ def train(epoch):
         labels = batch['labels'].to(config['device'], dtype=torch.long)
 
         tr_logits = model(input_ids=ids, attn_masks=mask)
-        #tr_logits, is_two = model(input_ids=ids, attn_masks=mask)
         loss = 0
-        labels2 = []
-        '''
-        for i1 in range(len(labels)):
-            label = []
-            for i2 in range(len(labels[i1])):
-                if labels[i1][i2] == -100:
-                    label.append(-100)
-                    continue
-                if 'Counterclaim' in ids_to_labels[int(labels[i1][i2])]:
-                    label.append(1)
-                elif 'Rebuttal' in ids_to_labels[int(labels[i1][i2])]:
-                    label.append(2)
-                else:
-                    label.append(0)
-            labels2.append(label)
-        '''
+
         for i in range(len(tr_logits)):
             loss += lossn(tr_logits[i], labels[i])
-            #loss += lossn(is_two[i], torch.tensor(labels2[i]).to(config['device']))
 
         tr_loss += loss.item()
 
@@ -472,6 +448,7 @@ def train(epoch):
 
 
 # 加载\训练模型
+random.seed(42)
 if not LOAD_MODEL_FROM:
     # 加载模型部分参数
     '''
@@ -499,6 +476,7 @@ if not LOAD_MODEL_FROM:
     torch.save(model.state_dict(), f'bigbird_v{VER}.pt')
 else:
     model.load_state_dict(torch.load(f'{LOAD_MODEL_FROM}/bigbird_v{VER}.pt'))
+    #model.load_state_dict(torch.load(f'./bigbird_v1_没有换成-100 要重新练.pt'))
     print('Model loaded.')
 
 
@@ -528,7 +506,6 @@ def inference(batch):
     # MOVE BATCH TO GPU AND INFER
     ids = batch["input_ids"].to(config['device'])
     mask = batch["attention_mask"].to(config['device'])
-    #outputs, is_two = model(ids, attn_masks=mask)
     outputs = model(ids, attn_masks=mask)
 
     all_preds = torch.argmax(outputs, axis=-1).cpu().numpy()
