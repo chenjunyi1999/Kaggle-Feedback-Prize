@@ -5,11 +5,14 @@ import os
 # KAGGLE ONLY HAS 1, BUT OFFLINE, YOU CAN USE MORE
 from torch.utils.data import DataLoader, Dataset
 from torch import nn
+import nltk
+from nltk.corpus import wordnet
+import random
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 0,1,2,3 for four gpu
 
 # VERSION FOR SAVING MODEL WEIGHTS
-VER = 7
+VER = 2
 # IF VARIABLE IS NONE, THEN NOTEBOOK COMPUTES TOKENS
 # OTHERWISE NOTEBOOK LOADS TOKENS FROM PATH
 LOAD_TOKENS_FROM = '../input'
@@ -17,7 +20,7 @@ LOAD_TOKENS_FROM = '../input'
 # IF VARIABLE IS NONE, THEN NOTEBOOK TRAINS A NEW MODEL
 # OTHERWISE IT LOADS YOUR PREVIOUSLY TRAINED MODEL
 LOAD_MODEL_FROM = None
-# LOAD_MODEL_FROM = './'
+LOAD_MODEL_FROM = './'
 
 # IF FOLLOWING IS NONE, THEN NOTEBOOK
 # USES INTERNET AND DOWNLOADS HUGGINGFACE
@@ -36,8 +39,8 @@ config = {'model_name': MODEL_NAME,
           'max_length': 2048,
           'train_batch_size': 4,
           'valid_batch_size': 4,
-          'epochs': 3,
-          'learning_rates': [2.5e-6, 2.5e-5, 2.5e-6, 2.5e-6, 2.5e-6, 2.5e-6, 2.5e-7, 2.5e-7, 2.5e-7, 2.5e-7],
+          'epochs': 5,
+          'learning_rates': [2.5e-6, 2.5e-5, 2.5e-5, 2.5e-6, 2.5e-6, 2.5e-6, 2.5e-7, 2.5e-7, 2.5e-7, 2.5e-7],
           'max_grad_norm': 10,
           'device': 'cuda' if cuda.is_available() else 'cpu'}
 
@@ -127,9 +130,7 @@ ids_to_labels = {k: v for k, v in enumerate(output_labels)}
 
 #########################################################################
 # 定义dataset
-import nltk
-from nltk.corpus import wordnet
-import random
+
 
 LABEL_ALL_SUBTOKENS = True
 
@@ -186,7 +187,8 @@ def word_level_aug(text, ratio=0.15):
         idx_synonyms = []
         for syn in wordnet.synsets(text[idx]):
             for lm in syn.lemmas():
-                idx_synonyms.append(lm.name())
+                if lm.name() != text[idx]:
+                    idx_synonyms.append(lm.name())
         if len(idx_synonyms)<1:
             continue
         k = random.sample(idx_synonyms, 1)[0]
@@ -285,6 +287,7 @@ class dataset(Dataset):
                 else:
                     text, word_labels = ri_rs_rd(text, word_labels, 0.15)
             text = text.split()
+
             #text = correct(text.split(), 1)
         else:
             text = text.split()
@@ -345,6 +348,7 @@ train_dataset = data.loc[data['id'].isin(IDS[train_idx]), ['text', 'entities']].
 random.seed(42)
 new_text = []
 new_entit = []
+delet = []
 for ii, i in enumerate(train_dataset.iterrows()):
     if ii % 100 == 0:
         print(ii, ', ', end='')
@@ -363,7 +367,16 @@ for ii, i in enumerate(train_dataset.iterrows()):
                 text, entit = ri_rs_rd(text, entit, 0.15)
             new_text.append(text)
             new_entit.append(entit)
+    else:
+        radint = random.randrange(0, 10)
+        if radint >= 6:
+            delet.append(ii)
 
+
+
+print(len(train_dataset))
+train_dataset.drop(index=delet, inplace=True)
+train_dataset = train_dataset.reset_index(drop=True)
 print(len(train_dataset))
 for i in range(len(new_text)):
     train_dataset.loc[len(train_dataset)] = [new_text[i], new_entit[i]]
@@ -663,14 +676,14 @@ def get_predictions(df=test_dataset, loader=testing_loader):
             '''
             if cls == 'O':
                 j += 1
+                continue
             else:
                 cls = cls.replace('B', 'I')  # spans start with B
                 sum_prd += grade[j]
-            end = j + 1
+                end = j + 1
             while end < len(pred) and pred[end] == cls:
                 sum_prd += grade[end]
                 end += 1
-
             if cls != 'O' and cls != '' and sum_prd/(end - j) >= proba_thresh[cls.replace('I-', '')] and end - j >= min_thresh[cls.replace('I-', '')]:
                 final_preds2.append((idx, cls.replace('I-', ''),
                                      ' '.join(map(str, list(range(j, end))))))

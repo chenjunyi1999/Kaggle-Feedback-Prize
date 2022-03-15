@@ -12,7 +12,7 @@ import random
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 0,1,2,3 for four gpu
 
 # VERSION FOR SAVING MODEL WEIGHTS
-VER = 2
+VER = 7
 # IF VARIABLE IS NONE, THEN NOTEBOOK COMPUTES TOKENS
 # OTHERWISE NOTEBOOK LOADS TOKENS FROM PATH
 LOAD_TOKENS_FROM = '../input'
@@ -20,7 +20,7 @@ LOAD_TOKENS_FROM = '../input'
 # IF VARIABLE IS NONE, THEN NOTEBOOK TRAINS A NEW MODEL
 # OTHERWISE IT LOADS YOUR PREVIOUSLY TRAINED MODEL
 LOAD_MODEL_FROM = None
-#LOAD_MODEL_FROM = './'
+# LOAD_MODEL_FROM = './'
 
 # IF FOLLOWING IS NONE, THEN NOTEBOOK
 # USES INTERNET AND DOWNLOADS HUGGINGFACE
@@ -349,7 +349,7 @@ data = train_text_df[['id', 'text', 'entities']]
 train_dataset = data.loc[data['id'].isin(IDS),['text', 'entities']].reset_index(drop=True)
 # 只对train集做augment
 
-random.seed(42)
+
 new_text = []
 new_entit = []
 delet = []
@@ -360,8 +360,8 @@ for ii, i in enumerate(train_dataset.iterrows()):
     total = i[1]['text'].split().__len__()
     entities = i[1]['entities']
     # 对这两类增广
-    if 'I-Counterclaim' in entities or 'I-Rebuttal' in entities or 'I-Claim' in entities:
-        for jk in range(2):
+    if 'I-Counterclaim' in entities or 'I-Rebuttal' in entities :#or 'I-Claim' in entities:
+        for jk in range(1):
             text = copy.deepcopy(i[1]['text'])
             entit = copy.deepcopy(entities)
             radint = random.randrange(0, 10)
@@ -377,7 +377,7 @@ for ii, i in enumerate(train_dataset.iterrows()):
         if radint >= 8:
             delet.append(ii)
     '''
-random.seed(None)
+
 
 
 print(len(train_dataset))
@@ -429,8 +429,19 @@ class MyModel(nn.Module):
     def __init__(self, freeze_bert=False, model_name='bert-base-chinese', hidden_size=1024, num_classes=2):
         super(MyModel, self).__init__()
         # output_hidden_states=True输出每一层transformer的输出，但是只有最后一层为常用word embedding
-        self.automodel = AutoModel.from_pretrained(model_name, output_hidden_states=True, return_dict=True)
+        config = AutoConfig.from_pretrained(model_name)
 
+        # hidden_dropout_prob: float = 0.22
+        # layer_norm_eps: float = 17589e-7
+        config.update(
+            {
+                "output_hidden_states": True,
+                # "hidden_dropout_prob": hidden_dropout_prob,
+                # "layer_norm_eps": layer_norm_eps,
+                # "add_pooling_layer": False,
+            }
+        )
+        self.automodel = AutoModel.from_config(config)
         self.fc = nn.Sequential(
             nn.Dropout(p=0.5),
             nn.Linear(hidden_size * 4, num_classes, bias=False),
@@ -451,7 +462,7 @@ class MyModel(nn.Module):
 
 model = MyModel(model_name=DOWNLOADED_MODEL_PATH, num_classes=15, freeze_bert=False)
 optimizer = torch.optim.Adam(params=model.parameters(), lr=config['learning_rates'][0])
-num_batches = len(training_loader)/4
+num_batches = len(training_loader)/8
 total_train_steps = int(num_batches*config['epochs'])
 warmup_steps = int(0.1 * total_train_steps)
 sched = get_polynomial_decay_schedule_with_warmup(optimizer,
@@ -489,7 +500,7 @@ def train(epoch):
         nb_tr_steps += 1
         nb_tr_examples += labels.size(0)
 
-        if idx % 200 == 0:
+        if idx % 1000 == 0:
             loss_step = tr_loss / nb_tr_steps
             print(f"Training loss after {idx:04d} training steps: {loss_step}")
 
@@ -519,7 +530,7 @@ def train(epoch):
         # backward pass
 
         loss.backward()
-        if n == 4:
+        if n == 8:
             optimizer.step()
             sched.step()
             optimizer.zero_grad()
@@ -564,7 +575,7 @@ if not LOAD_MODEL_FROM:
 
     torch.save(model.state_dict(), f'longformer-large_all_v{VER}.pt')
 else:
-    model.load_state_dict(torch.load(f'{LOAD_MODEL_FROM}/longformer_all_v{VER}.pt'))
+    model.load_state_dict(torch.load(f'{LOAD_MODEL_FROM}/longformer-large_temporary_v7_6.pt'))
     #model.fc[0] = nn.Dropout(p=0)
     print('Model loaded.')
 
@@ -616,7 +627,6 @@ def inference(batch):
                 pass
             elif word_idx != previous_word_idx:
                 # 用子词出现次数最多的标签作为原词预测标签
-
                 if len(t) >= 1:
                     haha = max(t, key=t.count)
                     prediction.append(haha)
@@ -680,25 +690,6 @@ def get_predictions(df=test_dataset, loader=testing_loader):
                 cls = pred[j]
                 # is_x = twoes[j]
                 sum_prd = 0
-
-                '''
-                if is_x == 0:
-                    pass
-                else:
-                    start = j
-                    stop = j + 1
-                    while stop < len(twoes) and twoes[stop] == is_x:
-                        stop += 1
-                    if stop - start >= 10:
-                        if is_x == 2:
-                            final_preds2.append((idx, 'Rebuttal',
-                                             ' '.join(map(str, list(range(start, stop))))))
-                        else:
-                            final_preds2.append((idx, 'Counterclaim',
-                                                 ' '.join(map(str, list(range(start, stop))))))
-                        j = stop
-                        continue
-                '''
                 if cls != 'O':
                     cls = cls.replace('B', 'I')  # spans start with B
                     sum_prd += grade[j]
