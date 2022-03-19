@@ -6,7 +6,7 @@ import random
 import numpy as np, os
 import pandas as pd, gc
 from tqdm import tqdm
-#nltk.download('wordnet')
+nltk.download('wordnet')
 
 random.seed(42)
 # 有待测试
