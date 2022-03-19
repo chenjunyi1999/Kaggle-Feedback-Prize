@@ -1,3 +1,4 @@
+import copy
 import os
 
 # DECLARE HOW MANY GPUS YOU WISH TO USE.
@@ -8,7 +9,7 @@ from torch import nn
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 0,1,2,3 for four gpu
 
 # VERSION FOR SAVING MODEL WEIGHTS
-VER = 3
+VER = 7
 # IF VARIABLE IS NONE, THEN NOTEBOOK COMPUTES TOKENS
 # OTHERWISE NOTEBOOK LOADS TOKENS FROM PATH
 LOAD_TOKENS_FROM = '../input'
@@ -16,7 +17,7 @@ LOAD_TOKENS_FROM = '../input'
 # IF VARIABLE IS NONE, THEN NOTEBOOK TRAINS A NEW MODEL
 # OTHERWISE IT LOADS YOUR PREVIOUSLY TRAINED MODEL
 LOAD_MODEL_FROM = None
-#LOAD_MODEL_FROM = './'
+LOAD_MODEL_FROM = './'
 
 # IF FOLLOWING IS NONE, THEN NOTEBOOK
 # USES INTERNET AND DOWNLOADS HUGGINGFACE
@@ -35,7 +36,7 @@ config = {'model_name': MODEL_NAME,
           'max_length': 1024,
           'train_batch_size': 6,
           'valid_batch_size': 6,
-          'epochs': 5,
+          'epochs': 3,
           'learning_rates': [2.5e-5, 2.5e-5, 2.5e-6, 2.5e-6, 2.5e-6, 2.5e-6, 2.5e-7, 2.5e-7, 2.5e-7, 2.5e-7],
           'max_grad_norm': 10,
           'device': 'cuda' if cuda.is_available() else 'cpu'}
@@ -101,8 +102,8 @@ if not LOAD_TOKENS_FROM:
 else:
     from ast import literal_eval
 
-    #train_text_df = pd.read_csv(f'{LOAD_TOKENS_FROM}/train_NER.csv')
-    train_text_df = pd.read_csv(f'{LOAD_TOKENS_FROM}/train_NER_augment_counter_and_rebuttal.csv')
+    train_text_df = pd.read_csv(f'{LOAD_TOKENS_FROM}/train_NER.csv')
+    # train_text_df = pd.read_csv(f'{LOAD_TOKENS_FROM}/train_NER_augment_counter_and_rebuttal.csv')
     # pandas saves lists as string, we must convert back
     # 将字符串形的list转化会list
     train_text_df.entities = train_text_df.entities.apply(lambda x: literal_eval(x))
@@ -173,7 +174,12 @@ def word_level_aug(text, ratio=0.15):
                 idx_synonyms.append(lm.name())
         if len(idx_synonyms)<1:
             continue
-        text[idx] = random.sample(idx_synonyms, 1)[0]
+        k = random.sample(idx_synonyms, 1)[0]
+        n = 1
+        while len(k.split()) != 1 and n <= 10:
+            k = random.sample(idx_synonyms, 1)[0]
+            n += 1
+        text[idx] = k
     return ' '.join([i for i in text])
 
 def ri_rs_rd(text, label, ratio):
@@ -187,16 +193,10 @@ def ri_rs_rd(text, label, ratio):
             idx = random.randint(0, len(text) - 1)
             k = label[idx]
             n = 0
-            while 'B-' in k:
+            while 'B-' in k or text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
                 idx = random.randint(0, len(text) - 1)
                 k = label[idx]
                 n += 1
-                if n > 10:
-                    break
-            n = 0
-            while text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
-                idx = random.randint(0, len(text) - 1)
-                k = label[idx]
                 if n > 10:
                     break
             idx_synonyms = []
@@ -205,14 +205,17 @@ def ri_rs_rd(text, label, ratio):
                     idx_synonyms.append(lm.name())
             if len(idx_synonyms)<1:
                 continue
+
             index = random.randint(0, len(text) - 1)
             n = 0
             while k != label[index]:
                 index = random.randint(0, len(text) - 1)
                 if n > 10:
                     break
-            text.insert(index, random.sample(idx_synonyms, 1)[0])
-            label.insert(index, label[idx])
+            k1 = random.sample(idx_synonyms, 1)[0]
+            text.insert(index, k1)
+            for i in range(len(k1.split())):
+                label.insert(index, label[idx])
 
     if k == 1:
         # 随机交换
@@ -220,7 +223,9 @@ def ri_rs_rd(text, label, ratio):
             idx1 = random.randint(0, len(text) - 1)
             idx2 = random.randint(0, len(text) - 1)
             n = 0
-            while label[idx1] != label[idx2]:
+            while label[idx1] != label[idx2] or text[idx1][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...']\
+                    or text[idx2][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...']:
+                idx1 = random.randint(0, len(text) - 1)
                 idx2 = random.randint(0, len(text) - 1)
                 if n > 10:
                     break
@@ -232,7 +237,7 @@ def ri_rs_rd(text, label, ratio):
         for i in range(num_changes):
             idx = random.randint(0, len(text) - 1)
             n = 0
-            while 'B-' in label[idx]:
+            while 'B-' in label[idx] or text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
                 idx = random.randint(0, len(text) - 1)
                 if n > 10:
                     break
@@ -254,17 +259,17 @@ class dataset(Dataset):
         # GET TEXT AND WORD LABELS
         text = self.data.text[index]
         word_labels = self.data.entities[index] if not self.get_wids else None
-        '''
+
         if not self.get_wids:
 
             randint = random.randrange(0,2)
             if randint == 1:
                 radint = random.randrange(0, 10)
                 if radint < 4:
-                    text = word_level_aug(text, 0.5)
-                #else:
-                    #text, word_labels = ri_rs_rd(text, word_labels, 0.15)
-        '''
+                    text = word_level_aug(text, 0.15)
+                else:
+                    text, word_labels = ri_rs_rd(text, word_labels, 0.15)
+
 
         # TOKENIZE TEXT
         # is_split_into_words:假设输入已经按字切分，直接进行tokenize，适用于ner
@@ -319,6 +324,35 @@ np.random.seed(None)
 # CREATE TRAIN SUBSET AND VALID SUBSET
 data = train_text_df[['id', 'text', 'entities']]
 train_dataset = data.loc[data['id'].isin(IDS[train_idx]), ['text', 'entities']].reset_index(drop=True)
+# 只对train集做augment
+random.seed(42)
+new_text = []
+new_entit = []
+for ii, i in enumerate(train_dataset.iterrows()):
+    if ii % 100 == 0:
+        print(ii, ', ', end='')
+    # i[0]为序号，真正的字典存储在i[1]
+    total = i[1]['text'].split().__len__()
+    entities = i[1]['entities']
+    # 对这两类增广
+    if 'I-Counterclaim' in entities or 'I-Rebuttal' in entities:
+        for jk in range(4):
+            text = copy.deepcopy(i[1]['text'])
+            entit = copy.deepcopy(entities)
+            radint = random.randrange(0, 10)
+            if radint < 5:
+                text = word_level_aug(text, 0.15)
+            else:
+                text, entit = ri_rs_rd(text, entit, 0.15)
+            new_text.append(text)
+            new_entit.append(entit)
+
+print(len(train_dataset))
+for i in range(len(new_text)):
+    train_dataset.loc[len(train_dataset)] = [new_text[i], new_entit[i]]
+print(len(train_dataset))
+train_dataset.to_csv('../input/new_train_dataset_NER_augment_counter_and_rebuttal.csv', index=False)
+
 test_dataset = data.loc[data['id'].isin(IDS[valid_idx])].reset_index(drop=True)
 
 print("FULL Dataset: {}".format(data.shape))
@@ -368,8 +402,6 @@ class MyModel(nn.Module):
 
         if freeze_bert:
             for p in self.automodel.parameters():
-                p.requires_grad = False
-            for p in self.fc.parameters():
                 p.requires_grad = False
 
     def forward(self, input_ids, attn_masks):
@@ -448,7 +480,7 @@ def train(epoch):
 
 
 # 加载\训练模型
-random.seed(42)
+
 if not LOAD_MODEL_FROM:
     # 加载模型部分参数
     '''
@@ -520,14 +552,36 @@ def inference(batch):
         prediction = []
         sorce = []
         word_ids = batch['wids'][k].numpy()
-        previous_word_idx = -1
+        previous_word_idx = word_ids[0]
+        t = []
+        down = []
         for idx, word_idx in enumerate(word_ids):
             if word_idx == -1:
                 pass
             elif word_idx != previous_word_idx:
+                # 用子词出现次数最多的标签作为原词预测标签
+
+                if len(t) >= 1:
+                    haha = max(t, key=t.count)
+                    prediction.append(haha)
+                    sorce.append(outputs[k][down[t.index(haha)]][text_preds[down[t.index(haha)]]])
+                previous_word_idx = word_idx
+                t, down = [], []
+                t.append(token_preds[idx])
+                down.append(idx)
+                '''
                 prediction.append(token_preds[idx])
                 sorce.append(outputs[k][idx][text_preds[idx]])
                 previous_word_idx = word_idx
+                '''
+            else:
+                t.append(token_preds[idx])
+                down.append(idx)
+
+        haha = max(t, key=t.count)
+        prediction.append(haha)
+        sorce.append(outputs[k][down[t.index(haha)]][text_preds[down[t.index(haha)]]])
+
         predictions.append(prediction)
         sorces.append(sorce)
 

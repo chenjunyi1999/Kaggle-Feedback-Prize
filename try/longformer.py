@@ -1,13 +1,12 @@
 import copy
 import os
+import random
 
+from nltk.corpus import wordnet
+from torch import nn
 # DECLARE HOW MANY GPUS YOU WISH TO USE.
 # KAGGLE ONLY HAS 1, BUT OFFLINE, YOU CAN USE MORE
 from torch.utils.data import DataLoader, Dataset
-from torch import nn
-import nltk
-from nltk.corpus import wordnet
-import random
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 0,1,2,3 for four gpu
 
@@ -55,7 +54,7 @@ import numpy as np, os
 import pandas as pd, gc
 from tqdm import tqdm
 
-from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoConfig, AutoModel, LongformerTokenizerFast
+from transformers import AutoModel, LongformerTokenizerFast
 import torch
 from sklearn.metrics import accuracy_score
 
@@ -137,7 +136,6 @@ LABEL_ALL_SUBTOKENS = True
 commas = ['.', ',', '!', '...', '......', '?', '"', '\'']
 
 
-
 def correct(words, type=0):
     from spellchecker import SpellChecker
     spell = SpellChecker()
@@ -175,21 +173,22 @@ def correct(words, type=0):
         print("type error")
         return
 
+
 def word_level_aug(text, ratio=0.15):
     text = text.split()
     length = len(text)
-    num_changes = int(length*ratio)
+    num_changes = int(length * ratio)
     # 生成肯定不相同的
-    idxs = random.sample(range(0, length-1), num_changes)
+    idxs = random.sample(range(0, length - 1), num_changes)
     for idx in idxs:
-        if text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
+        if text[idx][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...']:
             continue
         idx_synonyms = []
         for syn in wordnet.synsets(text[idx]):
             for lm in syn.lemmas():
                 if lm.name() != text[idx]:
                     idx_synonyms.append(lm.name())
-        if len(idx_synonyms)<1:
+        if len(idx_synonyms) < 1:
             continue
         k = random.sample(idx_synonyms, 1)[0]
         n = 1
@@ -198,6 +197,7 @@ def word_level_aug(text, ratio=0.15):
             n += 1
         text[idx] = k
     return ' '.join([i for i in text])
+
 
 def ri_rs_rd(text, label, ratio):
     text = text.split()
@@ -210,7 +210,7 @@ def ri_rs_rd(text, label, ratio):
             idx = random.randint(0, len(text) - 1)
             k = label[idx]
             n = 0
-            while 'B-' in k or text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
+            while 'B-' in k or text[idx][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...']:
                 idx = random.randint(0, len(text) - 1)
                 k = label[idx]
                 n += 1
@@ -220,7 +220,7 @@ def ri_rs_rd(text, label, ratio):
             for syn in wordnet.synsets(text[idx]):
                 for lm in syn.lemmas():
                     idx_synonyms.append(lm.name())
-            if len(idx_synonyms)<1:
+            if len(idx_synonyms) < 1:
                 continue
 
             index = random.randint(0, len(text) - 1)
@@ -240,7 +240,7 @@ def ri_rs_rd(text, label, ratio):
             idx1 = random.randint(0, len(text) - 1)
             idx2 = random.randint(0, len(text) - 1)
             n = 0
-            while label[idx1] != label[idx2] or text[idx1][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...']\
+            while label[idx1] != label[idx2] or text[idx1][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...'] \
                     or text[idx2][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...']:
                 idx1 = random.randint(0, len(text) - 1)
                 idx2 = random.randint(0, len(text) - 1)
@@ -250,11 +250,11 @@ def ri_rs_rd(text, label, ratio):
             label[idx1], label[idx2] = label[idx2], label[idx1]
 
     if k == 2:
-        #随机删除
+        # 随机删除
         for i in range(num_changes):
             idx = random.randint(0, len(text) - 1)
             n = 0
-            while 'B-' in label[idx] or text[idx][-1] in ['\'','"','.',',','?','!','......','...']:
+            while 'B-' in label[idx] or text[idx][-1] in ['\'', '"', '.', ',', '?', '!', '......', '...']:
                 idx = random.randint(0, len(text) - 1)
                 if n > 10:
                     break
@@ -279,7 +279,7 @@ class dataset(Dataset):
 
         if not self.get_wids:
 
-            randint = random.randrange(0,2)
+            randint = random.randrange(0, 2)
             if randint == 1:
                 radint = random.randrange(0, 10)
                 if radint < 4:
@@ -288,7 +288,7 @@ class dataset(Dataset):
                     text, word_labels = ri_rs_rd(text, word_labels, 0.15)
             text = text.split()
 
-            #text = correct(text.split(), 1)
+            # text = correct(text.split(), 1)
         else:
             text = text.split()
         # TOKENIZE TEXT
@@ -372,8 +372,6 @@ for ii, i in enumerate(train_dataset.iterrows()):
         if radint >= 6:
             delet.append(ii)
 
-
-
 print(len(train_dataset))
 train_dataset.drop(index=delet, inplace=True)
 train_dataset = train_dataset.reset_index(drop=True)
@@ -446,6 +444,7 @@ class MyModel(nn.Module):
 model = MyModel(model_name=DOWNLOADED_MODEL_PATH, num_classes=15, freeze_bert=False)
 optimizer = torch.optim.Adam(params=model.parameters(), lr=config['learning_rates'][0])
 model.to(config['device'])
+
 
 def train(epoch):
     tr_loss, tr_accuracy = 0, 0
@@ -538,9 +537,8 @@ if not LOAD_MODEL_FROM:
     torch.save(model.state_dict(), f'longformer_v{VER}.pt')
 else:
     model.load_state_dict(torch.load(f'{LOAD_MODEL_FROM}/longformer_v{VER}.pt'))
-    #model.load_state_dict(torch.load(f'./bigbird_v1_没有换成-100 要重新练.pt'))
+    # model.load_state_dict(torch.load(f'./bigbird_v1_没有换成-100 要重新练.pt'))
     print('Model loaded.')
-
 
 #################################################################################
 # 推理及验证数据
@@ -564,6 +562,7 @@ min_thresh = {
     "Rebuttal": 4,
 }
 
+
 def inference(batch):
     # MOVE BATCH TO GPU AND INFER
     ids = batch["input_ids"].to(config['device'])
@@ -571,8 +570,8 @@ def inference(batch):
     outputs = model(ids, attn_masks=mask)
 
     all_preds = torch.argmax(outputs, axis=-1).cpu().numpy()
-    #twos = torch.argmax(is_two, axis=-1).cpu().numpy()
-    outputs = torch.softmax(outputs, axis = -1).detach().cpu().numpy()
+    # twos = torch.argmax(is_two, axis=-1).cpu().numpy()
+    outputs = torch.softmax(outputs, axis=-1).detach().cpu().numpy()
     # INTERATE THROUGH EACH TEXT AND GET PRED
     predictions = []
     sorces = []
@@ -616,7 +615,7 @@ def inference(batch):
         sorces.append(sorce)
 
     return predictions, sorces
-    #return predictions, sorces, twos
+    # return predictions, sorces, twos
 
 
 # 在推理阶段，对每个字词都进行预测。所以在最后得到输出标签时，要将这些自词合并
@@ -631,7 +630,7 @@ def get_predictions(df=test_dataset, loader=testing_loader):
     y_log = []
     # y_two = []
     for batch in loader:
-        #labels, logs, twos = inference(batch)
+        # labels, logs, twos = inference(batch)
         labels, logs = inference(batch)
         y_pred2.extend(labels)
         y_log.extend(logs)
@@ -684,7 +683,8 @@ def get_predictions(df=test_dataset, loader=testing_loader):
             while end < len(pred) and pred[end] == cls:
                 sum_prd += grade[end]
                 end += 1
-            if cls != 'O' and cls != '' and sum_prd/(end - j) >= proba_thresh[cls.replace('I-', '')] and end - j >= min_thresh[cls.replace('I-', '')]:
+            if cls != 'O' and cls != '' and sum_prd / (end - j) >= proba_thresh[cls.replace('I-', '')] and end - j >= \
+                    min_thresh[cls.replace('I-', '')]:
                 final_preds2.append((idx, cls.replace('I-', ''),
                                      ' '.join(map(str, list(range(j, end))))))
 

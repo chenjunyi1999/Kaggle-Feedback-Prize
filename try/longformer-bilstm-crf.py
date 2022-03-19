@@ -13,7 +13,7 @@ from torch import nn
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # 0,1,2,3 for four gpu
 
 # VERSION FOR SAVING MODEL WEIGHTS
-VER = 1
+VER = 3
 # IF VARIABLE IS NONE, THEN NOTEBOOK COMPUTES TOKENS
 # OTHERWISE NOTEBOOK LOADS TOKENS FROM PATH
 LOAD_TOKENS_FROM = '../input'
@@ -21,7 +21,7 @@ LOAD_TOKENS_FROM = '../input'
 # IF VARIABLE IS NONE, THEN NOTEBOOK TRAINS A NEW MODEL
 # OTHERWISE IT LOADS YOUR PREVIOUSLY TRAINED MODEL
 LOAD_MODEL_FROM = None
-LOAD_MODEL_FROM = './'
+# LOAD_MODEL_FROM = './'
 
 # IF FOLLOWING IS NONE, THEN NOTEBOOK
 # USES INTERNET AND DOWNLOADS HUGGINGFACE
@@ -40,8 +40,8 @@ config = {'model_name': MODEL_NAME,
           'max_length': 2048,
           'train_batch_size': 4,
           'valid_batch_size': 4,
-          'epochs': 4,
-          'learning_rates': [2.5e-6, 2.5e-5, 2.5e-5, 2.5e-5, 2.5e-6, 2.5e-6, 2.5e-7, 2.5e-7, 2.5e-7, 2.5e-7],
+          'epochs': 8,
+          'learning_rates': [2.5e-6, 2.5e-5, 2.5e-5, 2.5e-5, 2.5e-5, 2.5e-5, 2.5e-6, 2.5e-7, 2.5e-7, 2.5e-7],
           'max_grad_norm': 10,
           'device': 'cuda' if cuda.is_available() else 'cpu'}
 
@@ -427,9 +427,14 @@ class MyModel(nn.Module):
         super(MyModel, self).__init__()
         # output_hidden_states=True输出每一层transformer的输出，但是只有最后一层为常用word embedding
         self.automodel = AutoModel.from_pretrained(model_name, output_hidden_states=True, return_dict=True)
-        # self.bilstm = nn.LSTM(input_size=768, hidden_size=256, dropout=0.5, bidirectional=True, batch_first=True)
+        #self.bilstm = nn.LSTM(input_size=768, hidden_size=256, dropout=0.5, bidirectional=True, batch_first=True)
         self.transition = nn.Parameter(torch.ones(19, 19) * 1/19)
-        self.lin = nn.Linear(2*hidden_size, 19)#768, 19)
+        self.lin = nn.Linear(768, 19)
+
+        #self.fc = nn.Sequential(
+        #    nn.Dropout(p=0.5),
+        #    nn.Linear(hidden_size * 4, num_classes, bias=False),
+        #)
 
         if freeze_bert:
             for p in self.automodel.parameters():
@@ -441,8 +446,8 @@ class MyModel(nn.Module):
         hidden_states = torch.cat(tuple([outputs.hidden_states[i] for i in [-1]]),
                                   dim=-1)  # [bs, seq_len, hidden_dim*4]
         packed = pack_padded_sequence(hidden_states, lengths, batch_first=True, enforce_sorted=False)
-        rnn_out, _ = self.bilstm(packed)
-        rnn_out, _ = pad_packed_sequence(rnn_out, batch_first=True)
+        # rnn_out, _ = self.bilstm(packed)
+        rnn_out, _ = pad_packed_sequence(packed, batch_first=True)
         emission = self.lin(rnn_out)
         crf_scores = emission.unsqueeze(
             2).expand(-1, -1, 19, -1) + self.transition.unsqueeze(0)
