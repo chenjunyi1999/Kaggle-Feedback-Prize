@@ -5,3 +5,5 @@ https://www.kaggle.com/c/feedback-prize-2021
 `final`: 最终提交 <br>
 `try`: 尝试记录 <br>
 `tool`: 数据增强/清洗工具类 <br>
+### private sorce: 0.701
+### public socre: 0.690
